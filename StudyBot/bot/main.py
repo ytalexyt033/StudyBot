@@ -1,34 +1,41 @@
-import logging
+import asyncio
+from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.utils.callback_answer import CallbackAnswerMiddleware
+from bot.handlers import common, order_handlers, dispute_handlers
+from config.settings import TOKEN
+from handlers import common, order_handlers, dispute_handlers
+from middlewares.user_middleware import UserMiddleware
+from services.database import Database
 import sys
 from pathlib import Path
 
-# Добавляем корень проекта в PYTHONPATH
-sys.path.append(str(Path(__file__).parent.parent))
+# Добавляем корень проекта в путь поиска модулей
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from telegram.ext import Application
-from config import TOKEN, DB_NAME
-from bot.services.database import Database
-from bot.services.order_manager import OrderManager
-from bot.handlers import register_handlers
-
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
-def main():
-    application = Application.builder().token(TOKEN).build()
+from bot.handlers import common, order_handlers, dispute_handlers
+async def main():
+    bot = Bot(token=TOKEN)
+    dp = Dispatcher(storage=MemoryStorage())
     
-    # Инициализация БД и менеджеров
-    db = Database(DB_NAME)
-    application.bot_data['db'] = db
-    application.bot_data['order_manager'] = OrderManager(application, db)
+    # Инициализация базы данных
+    db = Database()
     
-    # Регистрация обработчиков
-    register_handlers(application)
+    # Регистрация middleware
+    dp.update.middleware(UserMiddleware(db))
+    dp.callback_query.middleware(CallbackAnswerMiddleware())
     
-    application.run_polling()
+    # Регистрация роутеров
+    dp.include_router(common.router)
+    dp.include_router(order_handlers.router)
+    dp.include_router(dispute_handlers.router)
+    
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()
+        db.close()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

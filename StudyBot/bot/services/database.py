@@ -1,15 +1,22 @@
 import sqlite3
-import uuid
 from typing import Dict, Any, List, Optional
 from pathlib import Path
-from models.enums import OrderStatus, UserRole, DisputeStatus
+import uuid
+from datetime import datetime
+
+from models.user import User
+from models.order import Order
+from models.dispute import Dispute
+from config.settings import DB_NAME
+from config.constants import OrderStatus, UserRole, DisputeStatus
 
 class Database:
-    def __init__(self, db_path: Path):
-        self.conn = sqlite3.connect(db_path)
-        self.create_tables()
+    def __init__(self):
+        self.conn = sqlite3.connect(DB_NAME)
+        self._create_tables()
     
-    def create_tables(self):
+    def _create_tables(self):
+        """Создает все необходимые таблицы в базе данных"""
         cursor = self.conn.cursor()
         
         cursor.execute("""
@@ -87,63 +94,81 @@ class Database:
         )""")
         
         self.conn.commit()
-    
-    def add_user(self, user_id: int, username: str, first_name: str, last_name: str):
+
+    def add_user(self, user: User) -> None:
         cursor = self.conn.cursor()
         cursor.execute(
             "INSERT OR IGNORE INTO users (user_id, username, first_name, last_name) VALUES (?, ?, ?, ?)",
-            (user_id, username, first_name, last_name)
+            (user.user_id, user.username, user.first_name, user.last_name)
         )
         self.conn.commit()
     
-    def get_user(self, user_id: int) -> Optional[Dict[str, Any]]:
+    def get_user(self, user_id: int) -> Optional[User]:
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
         if row:
-            columns = [column[0] for column in cursor.description]
-            return dict(zip(columns, row))
+            return User(
+                user_id=row[0],
+                username=row[1],
+                first_name=row[2],
+                last_name=row[3],
+                role=row[4],
+                rating=row[5],
+                completed_orders=row[6],
+                created_at=row[7]
+            )
         return None
     
-    def set_user_role(self, user_id: int, role: str) -> bool:
-        if role not in [r.value for r in UserRole]:
-            return False
-        
+    def set_user_role(self, user_id: int, role: UserRole) -> bool:
         cursor = self.conn.cursor()
         cursor.execute(
             "UPDATE users SET role = ? WHERE user_id = ?",
-            (role, user_id))
+            (role.value, user_id)
+        )
         self.conn.commit()
-        return True
+        return cursor.rowcount > 0
     
-    def add_order(self, order_data: Dict[str, Any]) -> str:
-        order_id = str(uuid.uuid4())
+    def add_order(self, order: Order) -> str:
         cursor = self.conn.cursor()
         cursor.execute(
             """INSERT INTO orders (
                 order_id, type, subject, description, deadline, budget,
-                client_id, status, file_path, message_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                client_id, executor_id, status, file_path, message_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                order_id, order_data['type'], order_data['subject'],
-                order_data['description'], order_data['deadline'],
-                order_data['budget'], order_data['client_id'],
-                OrderStatus.ACTIVE.value, order_data.get('file_path'), None
+                order.order_id, order.type, order.subject,
+                order.description, order.deadline,
+                order.budget, order.client_id, order.executor_id,
+                order.status, order.file_path, order.message_id
             )
         )
         self.conn.commit()
-        return order_id
+        return order.order_id
     
-    def get_order(self, order_id: str) -> Optional[Dict[str, Any]]:
+    def get_order(self, order_id: str) -> Optional[Order]:
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM orders WHERE order_id = ?", (order_id,))
         row = cursor.fetchone()
         if row:
-            columns = [column[0] for column in cursor.description]
-            return dict(zip(columns, row))
+            return Order(
+                order_id=row[0],
+                type=row[1],
+                subject=row[2],
+                description=row[3],
+                deadline=row[4],
+                budget=row[5],
+                client_id=row[6],
+                executor_id=row[7],
+                status=row[8],
+                created_at=row[9],
+                completed_at=row[10],
+                file_path=row[11],
+                message_id=row[12]
+            )
         return None
     
-    def update_order(self, order_id: str, updates: Dict[str, Any]):
+    def update_order(self, order_id: str, updates: dict) -> bool:
         cursor = self.conn.cursor()
         set_clause = ", ".join(f"{key} = ?" for key in updates.keys())
         values = list(updates.values())
@@ -153,8 +178,9 @@ class Database:
             values
         )
         self.conn.commit()
+        return cursor.rowcount > 0
     
-    def get_user_orders(self, user_id: int, status: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_user_orders(self, user_id: int, status: Optional[str] = None) -> List[Order]:
         cursor = self.conn.cursor()
         query = "SELECT * FROM orders WHERE client_id = ?"
         params = [user_id]
@@ -164,82 +190,86 @@ class Database:
             params.append(status)
         
         cursor.execute(query, params)
-        rows = cursor.fetchall()
-        if rows:
-            columns = [column[0] for column in cursor.description]
-            return [dict(zip(columns, row)) for row in rows]
-        return []
+        return [
+            Order(
+                order_id=row[0],
+                type=row[1],
+                subject=row[2],
+                description=row[3],
+                deadline=row[4],
+                budget=row[5],
+                client_id=row[6],
+                executor_id=row[7],
+                status=row[8],
+                created_at=row[9],
+                completed_at=row[10],
+                file_path=row[11],
+                message_id=row[12]
+            )
+            for row in cursor.fetchall()
+        ]
     
-    def get_executor_orders(self, executor_id: int, status: Optional[str] = None) -> List[Dict[str, Any]]:
-        cursor = self.conn.cursor()
-        query = "SELECT * FROM orders WHERE executor_id = ?"
-        params = [executor_id]
-        
-        if status:
-            query += " AND status = ?"
-            params.append(status)
-        
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-        if rows:
-            columns = [column[0] for column in cursor.description]
-            return [dict(zip(columns, row)) for row in rows]
-        return []
-    
-    def get_active_orders(self) -> List[Dict[str, Any]]:
+    def get_active_orders(self) -> List[Order]:
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM orders WHERE status = ?", (OrderStatus.ACTIVE.value,))
-        rows = cursor.fetchall()
-        if rows:
-            columns = [column[0] for column in cursor.description]
-            return [dict(zip(columns, row)) for row in rows]
-        return []
+        return [
+            Order(
+                order_id=row[0],
+                type=row[1],
+                subject=row[2],
+                description=row[3],
+                deadline=row[4],
+                budget=row[5],
+                client_id=row[6],
+                executor_id=row[7],
+                status=row[8],
+                created_at=row[9],
+                completed_at=row[10],
+                file_path=row[11],
+                message_id=row[12]
+            )
+            for row in cursor.fetchall()
+        ]
     
-    def add_chat_message(self, order_id: str, user_id: int, message: str, is_file: bool = False, file_path: Optional[str] = None):
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """INSERT INTO chat_messages (
-                order_id, user_id, message, is_file, file_path
-            ) VALUES (?, ?, ?, ?, ?)""",
-            (order_id, user_id, message, int(is_file), file_path)
-        )
-        self.conn.commit()
-    
-    def get_chat_messages(self, order_id: str) -> List[Dict[str, Any]]:
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """SELECT cm.*, u.username, u.first_name, u.last_name 
-            FROM chat_messages cm
-            JOIN users u ON cm.user_id = u.user_id
-            WHERE cm.order_id = ?
-            ORDER BY cm.created_at""",
-            (order_id,)
-        )
-        rows = cursor.fetchall()
-        if rows:
-            columns = [column[0] for column in cursor.description]
-            return [dict(zip(columns, row)) for row in rows]
-        return []
-    
-    def add_dispute(self, order_id: str, opened_by: int, reason: str) -> str:
-        dispute_id = str(uuid.uuid4())
+    def add_dispute(self, dispute: Dispute) -> str:
         cursor = self.conn.cursor()
         cursor.execute(
             """INSERT INTO disputes (
-                dispute_id, order_id, opened_by, reason, status
-            ) VALUES (?, ?, ?, ?, ?)""",
-            (dispute_id, order_id, opened_by, reason, DisputeStatus.OPENED.value)
+                dispute_id, order_id, opened_by, admin_id, reason, status, resolution
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                dispute.dispute_id, dispute.order_id, dispute.opened_by,
+                dispute.admin_id, dispute.reason, dispute.status, dispute.resolution
+            )
         )
         
         cursor.execute(
             "UPDATE orders SET status = ? WHERE order_id = ?",
-            (OrderStatus.DISPUTE.value, order_id)
+            (OrderStatus.DISPUTE.value, dispute.order_id)
         )
         
         self.conn.commit()
-        return dispute_id
+        return dispute.dispute_id
     
-    def update_dispute(self, dispute_id: str, updates: Dict[str, Any]):
+    def get_dispute(self, dispute_id: str) -> Optional[Dispute]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM disputes WHERE dispute_id = ?", (dispute_id,))
+        row = cursor.fetchone()
+        if row:
+            return Dispute(
+                dispute_id=row[0],
+                order_id=row[1],
+                opened_by=row[2],
+                admin_id=row[3],
+                reason=row[4],
+                status=row[5],
+                resolution=row[6],
+                created_at=row[7],
+                resolved_at=row[8]
+            )
+        return None
+    
+    def update_dispute(self, dispute_id: str, updates: dict) -> bool:
         cursor = self.conn.cursor()
         set_clause = ", ".join(f"{key} = ?" for key in updates.keys())
         values = list(updates.values())
@@ -249,42 +279,7 @@ class Database:
             values
         )
         self.conn.commit()
+        return cursor.rowcount > 0
     
-    def get_dispute(self, dispute_id: str) -> Optional[Dict[str, Any]]:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM disputes WHERE dispute_id = ?", (dispute_id,))
-        row = cursor.fetchone()
-        if row:
-            columns = [column[0] for column in cursor.description]
-            return dict(zip(columns, row))
-        return None
-    
-    def get_order_dispute(self, order_id: str) -> Optional[Dict[str, Any]]:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM disputes WHERE order_id = ?", (order_id,))
-        row = cursor.fetchone()
-        if row:
-            columns = [column[0] for column in cursor.description]
-            return dict(zip(columns, row))
-        return None
-    
-    def add_rating(self, order_id: str, executor_id: int, customer_id: int, rating: int, comment: str):
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """INSERT INTO ratings (
-                order_id, executor_id, customer_id, rating, comment
-            ) VALUES (?, ?, ?, ?, ?)""",
-            (order_id, executor_id, customer_id, rating, comment)
-        )
-        
-        cursor.execute(
-            """UPDATE users 
-            SET rating = (
-                SELECT AVG(rating) FROM ratings WHERE executor_id = ?
-            ), 
-            completed_orders = completed_orders + 1
-            WHERE user_id = ?""",
-            (executor_id, executor_id)
-        )
-        
-        self.conn.commit()
+    def close(self):
+        self.conn.close()

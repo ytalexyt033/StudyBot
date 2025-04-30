@@ -1,43 +1,61 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CallbackQueryHandler, CommandHandler
-from models.enums import UserRole
-from config import SELECTING_ACTION
+from aiogram import Router, F
+from aiogram.types import Message, CallbackQuery
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    db = context.bot_data['db']
-    db.add_user(user.id, user.username, user.first_name, user.last_name)
-    
-    buttons = [
-        [InlineKeyboardButton("📝 Оставить заказ", callback_data="create_order")],
-        [InlineKeyboardButton("📋 Мои заказы", callback_data="my_orders")],
-        [InlineKeyboardButton("ℹ️ Правила", callback_data="show_rules")],
-        [InlineKeyboardButton("💬 Чат с поддержкой", url="https://t.me/StudyTipsSupport")]
-    ]
-    
-    user_data = db.get_user(user.id)
-    if user_data and user_data['role'] == UserRole.ADMIN.value:
-        buttons.append([InlineKeyboardButton("👑 Меню администратора", callback_data="admin_menu")])
-    
-    if user_data and user_data['role'] == UserRole.EXECUTOR.value:
-        buttons.append([InlineKeyboardButton("👨‍💻 Меню исполнителя", callback_data="executor_menu")])
-    
-    if update.message:
-        await update.message.reply_text(
-            "🔹 *STUDY TIPS*\n_Решаем, пишем, спасаем — пока ты отдыхаешь!_\n\n"
-            "Выберите действие:",
-            reply_markup=InlineKeyboardMarkup(buttons),
-            parse_mode="Markdown"
-        )
-    elif update.callback_query:
-        await update.callback_query.edit_message_text(
-            "🔹 *STUDY TIPS*\n_Решаем, пишем, спасаем — пока ты отдыхаешь!_\n\n"
-            "Выберите действие:",
-            reply_markup=InlineKeyboardMarkup(buttons),
-            parse_mode="Markdown"
-        )
-    
-    return SELECTING_ACTION
+from models.user import User
+from services.database import Database
+from keyboards.common import get_main_menu_kb
+from keyboards.common import get_back_kb
+from aiogram.utils.keyboard import InlineKeyboardButton, InlineKeyboardMarkup   
 
-def register_common_handlers(application):
-    application.add_handler(CommandHandler("start", start))
+router = Router()
+
+@router.message(Command("start"))
+async def start(message: Message, db: Database):
+    user = message.from_user
+    db_user = User(
+        user_id=user.id,
+        username=user.username,
+        first_name=user.first_name,
+        last_name=user.last_name
+    )
+    db.add_user(db_user)
+    
+    await message.answer(
+        "🔹 *STUDY TIPS*\n_Решаем, пишем, спасаем — пока ты отдыхаешь!_\n\n"
+        "Выберите действие:",
+        reply_markup=get_main_menu_kb(),
+        parse_mode="Markdown"
+    )
+
+@router.callback_query(F.data == "back_to_start")
+async def back_to_start(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.edit_text(
+        "🔹 *STUDY TIPS*\n_Решаем, пишем, спасаем — пока ты отдыхаешь!_\n\n"
+        "Выберите действие:",
+        reply_markup=get_main_menu_kb(),
+        parse_mode="Markdown"
+    )
+
+@router.callback_query(F.data == "show_rules")
+async def show_rules(callback: CallbackQuery):
+    await callback.answer()
+    
+    rules_text = (
+        "📜 *Правила сервиса STUDY TIPS*\n\n"
+        "1. Запрещено размещать заказы, нарушающие законодательство\n"
+        "2. Исполнитель обязан выполнить работу в срок\n"
+        "3. Заказчик обязан оплатить работу после проверки\n"
+        "4. Все споры решаются с участием администрации\n"
+        "5. Максимальное количество активных заказов - 3\n\n"
+        "⚠️ Нарушение правил может привести к блокировке!"
+    )
+    
+    from keyboards.common import get_back_kb
+    await callback.message.edit_text(
+        rules_text,
+        reply_markup=get_back_kb(),
+        parse_mode="Markdown"
+    )
